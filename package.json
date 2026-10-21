@@ -1,0 +1,11 @@
+{
+  "name": "tizenbrew-tools",
+  "version": "0.1.0",
+  "description": "TizenBrew service module: diagnostics and control HTTP API on the TV",
+  "packageType": "app",
+  "appName": "TV Tools",
+  "appPath": "app/index.html",
+  "serviceFile": "service.js",
+  "keys": [],
+  "license": "MIT"
+}
