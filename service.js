@@ -78,7 +78,12 @@ var server = http.createServer(function (req, res) {
       var raw = q.query.msg || "";
       return adbRaw(raw, res);
     }
-    return send(res, 200, "tv-tools ok. endpoints: /info /exec?cmd= /read?path= /ls?path= /write?path=&data= /adb?svc= /adb2?msg=hex");
+    if (p === "/adbuse") {
+      // GET /adbuse?svc=<service> — OPEN a stream on the daemon's captured adb socket
+      var svc2 = q.query.svc || "shell:id";
+      return adbUse(svc2, res);
+    }
+    return send(res, 200, "tv-tools ok. endpoints: /info /exec?cmd= /read?path= /ls?path= /write?path=&data= /adb?svc= /adb2?msg=hex /adbuse?svc=");
   } catch (e) {
     return send(res, 500, "err: " + e.message);
   }
@@ -147,6 +152,76 @@ function adbSession(svc, res) {
     clearTimeout(timer);
     send(res, 200, "ERR " + e.message + "\n" + log.join("\n"));
   });
+}
+
+var capturedSdb = null;
+try {
+  var _net = require("net");
+  var _origConn = _net.connect || _net.createConnection;
+  var wrap = function () {
+    var s = _origConn.apply(_net, arguments);
+    try {
+      s.on("connect", function () {
+        try {
+          if (s.remotePort === 26101) {
+            capturedSdb = s;
+            fs.writeFileSync("/tmp/capsdb.txt", "captured " + s.remoteAddress + ":" + s.remotePort + " " + new Date().toISOString());
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+    return s;
+  };
+  _net.connect = wrap;
+  _net.createConnection = wrap;
+  _net.Socket.prototype.connect = (function (orig) {
+    return function () {
+      var s = orig.apply(this, arguments);
+      var self = this;
+      this.once("connect", function () {
+        try {
+          if (self.remotePort === 26101) {
+            capturedSdb = self;
+            fs.writeFileSync("/tmp/capsdb.txt", "captured-sock " + new Date().toISOString());
+          }
+        } catch (e) {}
+      });
+      return s;
+    };
+  })(_net.Socket.prototype.connect);
+  fs.writeFileSync("/tmp/netpatch.txt", "patched " + new Date().toISOString());
+} catch (e) {
+  try { fs.writeFileSync("/tmp/netpatch.txt", "patch fail " + e.message); } catch (x) {}
+}
+
+function adbUse(svc, res) {
+  var log = [];
+  if (!capturedSdb || capturedSdb.destroyed) {
+    return send(res, 200, "no captured socket. marker: " + (function(){try{return fs.readFileSync("/tmp/capsdb.txt","utf8");}catch(e){return e.message;}})());
+  }
+  var acc = new Buffer(0);
+  var onData = function (d) {
+    acc = Buffer.concat([acc, d]);
+    while (acc.length >= 24) {
+      var cmd = acc.readUInt32LE(0), a0 = acc.readUInt32LE(4), a1 = acc.readUInt32LE(8), len = acc.readUInt32LE(12);
+      if (acc.length < 24 + len) break;
+      var pay = acc.slice(24, 24 + len);
+      log.push("cmd=0x" + cmd.toString(16) + " arg0=" + a0 + " arg1=" + a1 + " len=" + len + " data=" + pay.toString("hex").substr(0, 300) + " ascii=" + pay.toString("utf8").substr(0, 120));
+      acc = acc.slice(24 + len);
+    }
+  };
+  capturedSdb.on("data", onData);
+  var lid = 0x7777, rid = 0x1000 + Math.floor(Math.random() * 1000);
+  try {
+    capturedSdb.write(adbPkt(0x4e45504f, lid, rid, new Buffer(svc)));
+    log.push("wrote OPEN local=" + lid + " svc=" + svc);
+  } catch (e) {
+    return send(res, 200, "write fail: " + e.message);
+  }
+  setTimeout(function () {
+    try { capturedSdb.removeListener("data", onData); } catch (e) {}
+    send(res, 200, log.join("\n"));
+  }, 2500);
 }
 
 function adbRaw(hex, res) {
