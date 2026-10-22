@@ -78,12 +78,16 @@ var server = http.createServer(function (req, res) {
       var raw = q.query.msg || "";
       return adbRaw(raw, res);
     }
+    if (p === "/adbsend") {
+      // GET /adbsend?svc=<service>&data=<hex> — OPEN svc then WRTE hex payload, collect replies
+      return adbSend(q.query.svc || "sync:", q.query.data || "", res);
+    }
     if (p === "/adbuse") {
       // GET /adbuse?svc=<service> — OPEN a stream on the daemon's captured adb socket
       var svc2 = q.query.svc || "shell:id";
       return adbUse(svc2, res);
     }
-    return send(res, 200, "tv-tools ok. endpoints: /info /exec?cmd= /read?path= /ls?path= /write?path=&data= /adb?svc= /adb2?msg=hex /adbuse?svc=");
+    return send(res, 200, "tv-tools ok. endpoints: /info /exec?cmd= /read?path= /ls?path= /write?path=&data= /adb?svc= /adb2?msg=hex /adbsend?svc=&data=hex /adbuse?svc=");
   } catch (e) {
     return send(res, 500, "err: " + e.message);
   }
@@ -137,6 +141,59 @@ function adbSession(svc, res) {
         s.write(adbPkt(0x4f4b4159, a1, a0, new Buffer(0))); // READY? no: send nothing; log
       } else if (C === 0x45545752) { // WRTE
         s.write(adbPkt(0x4f4b4159, a1, a0, new Buffer(0))); // OKAY back
+      } else if (C === 0x45534c43) { // CLSE
+        clearTimeout(timer);
+        try { s.destroy(); } catch (e) {}
+        return send(res, 200, "CLSE\n" + log.join("\n"));
+      }
+    }
+  });
+  s.on("close", function () {
+    clearTimeout(timer);
+    send(res, 200, "CLOSED\n" + log.join("\n"));
+  });
+  s.on("error", function (e) {
+    clearTimeout(timer);
+    send(res, 200, "ERR " + e.message + "\n" + log.join("\n"));
+  });
+}
+
+function adbSend(svc, hex, res) {
+  var net = require("net");
+  var log = [];
+  var s = net.connect(26101, "127.0.0.1");
+  var timer = setTimeout(function () {
+    try { s.destroy(); } catch (e) {}
+    send(res, 200, "TIMEOUT\n" + log.join("\n"));
+  }, 6000);
+  s.on("connect", function () {
+    log.push("tcp-connected");
+    s.write(adbPkt(0x4e584e43, 0x02000000, 262144, new Buffer("host::\0"))); // CNXN
+  });
+  var acc = new Buffer(0);
+  var sent = false;
+  s.on("data", function (d) {
+    acc = Buffer.concat([acc, d]);
+    while (acc.length >= 24) {
+      var cmd = acc.readUInt32LE(0), a0 = acc.readUInt32LE(4), a1 = acc.readUInt32LE(8), len = acc.readUInt32LE(12);
+      if (acc.length < 24 + len) break;
+      var pay = acc.slice(24, 24 + len);
+      log.push("cmd=0x" + cmd.toString(16) + " arg0=" + a0 + " arg1=" + a1 + " len=" + len + " data=" + pay.toString("hex").substr(0, 400) + " ascii=" + pay.toString("utf8").substr(0, 160));
+      acc = acc.slice(24 + len);
+      var C = cmd >>> 0;
+      if (C === 0x4e584e43) { // CNXN
+        s.write(adbPkt(0x4e45504f, 0x1111, a0 || 1, new Buffer(svc + "\0"))); // OPEN
+        log.push("sent OPEN " + svc);
+      } else if (C === 0x59414b4f) { // OKAY
+        if (!sent && hex) {
+          sent = true;
+          s.write(adbPkt(0x45545257, a1, a0, new Buffer(hex, "hex"))); // WRTE
+          log.push("sent WRTE " + hex.length / 2 + " bytes");
+        } else {
+          s.write(adbPkt(0x59414b4f, a1, a0, new Buffer(0))); // OKAY back
+        }
+      } else if (C === 0x45545257) { // WRTE
+        s.write(adbPkt(0x59414b4f, a1, a0, new Buffer(0))); // OKAY back
       } else if (C === 0x45534c43) { // CLSE
         clearTimeout(timer);
         try { s.destroy(); } catch (e) {}
