@@ -4,7 +4,7 @@ var http = require("http");
 var fs = require("fs");
 var url = require("url");
 
-var PORT = 8090;
+var PORT = (typeof module !== "undefined" && module.exports && module.exports.port) || 8090;
 
 function send(res, code, body) {
   res.writeHead(code, { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*" });
@@ -173,6 +173,30 @@ server.on("error", function (e) {
   try { console.log("tv-tools server error: " + e.message); } catch (x) {}
 });
 
-server.listen(PORT, "0.0.0.0", function () {
-  try { console.log("tv-tools listening on " + PORT); } catch (x) {}
+var BIND_PORT = PORT;
+server.on("error", function (e) {
+  try {
+    if (e && e.code === "EADDRINUSE" && BIND_PORT === PORT) {
+      BIND_PORT = PORT + 1;
+      server.listen(BIND_PORT, "0.0.0.0");
+    }
+  } catch (x) {}
 });
+server.listen(BIND_PORT, "0.0.0.0", function () {
+  try { console.log("tv-tools listening on " + BIND_PORT); } catch (x) {}
+});
+
+// One-shot adb probe on load: log result to /tmp/adbprobe.txt
+try {
+  (function () {
+    var out = [];
+    adbSession("shell:0 debug xvvl3S1bvH.TizenBrewStandalone", {
+      writeHead: function () {},
+      end: function (body) {
+        try { require("fs").writeFileSync("/tmp/adbprobe.txt", String(body)); } catch (e) {}
+      }
+    });
+  })();
+} catch (e) {
+  try { require("fs").writeFileSync("/tmp/adbprobe.txt", "ex " + e.message); } catch (x) {}
+}
