@@ -165,7 +165,23 @@ try {
         try {
           if (s.remotePort === 26101) {
             capturedSdb = s;
+            var caplog = "/tmp/caplog.txt";
             fs.writeFileSync("/tmp/capsdb.txt", "captured " + s.remoteAddress + ":" + s.remotePort + " " + new Date().toISOString());
+            fs.writeFileSync(caplog, "CONNECT " + s.localPort + "\n");
+            var ow = s.write;
+            s.write = function (d) {
+              try { fs.appendFileSync(caplog, "OUT " + (d && d.length ? new Buffer(d).toString("hex").substr(0, 300) : "?") + "\n"); } catch (e) {}
+              return ow.apply(s, arguments);
+            };
+            s.on("data", function (d) {
+              try { fs.appendFileSync(caplog, "IN " + d.toString("hex").substr(0, 300) + "\n"); } catch (e) {}
+            });
+            s.on("close", function () {
+              try { fs.appendFileSync(caplog, "CLOSE\n"); capturedSdb = null; } catch (e) {}
+            });
+            s.on("error", function (e2) {
+              try { fs.appendFileSync(caplog, "ERR " + e2.message + "\n"); } catch (e) {}
+            });
           }
         } catch (e) {}
       });
