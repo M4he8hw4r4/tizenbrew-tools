@@ -371,6 +371,20 @@ server.listen(BIND_PORT, "0.0.0.0", function () {
   try { console.log("tv-tools listening on " + BIND_PORT); } catch (x) {}
 });
 
+// Boot hook: restore webapis shadow-mount (emp payload) if missing after reboot
+try {
+  (function () {
+    var cp = require("child_process");
+    var IMG = "/opt/usr/apps/appbinarymanager/emps/empPay_img/empPay.img";
+    var DST = "/opt/usr/apps/pepper/webapis";
+    var cmd = "grep -c 'empPepperPlugins/webapis' /proc/mounts | grep -qv '^0$' || " +
+      "gdbus call --system -d org.tizen.tv.appbinarymanager -o /org/tizen/tv/appbinarymanager " +
+      "-m org.tizen.tv.appbinarymanager.AppBinaryManagerExecudeAsync 0 0 'Mount' '" + IMG + "' '" + DST + "' '' " +
+      "> /tmp/empmount.log 2>&1";
+    cp.exec("sh -c \"" + cmd.replace(/"/g, '\\"') + "\"", { timeout: 15000 }, function () {});
+  })();
+} catch (e) {}
+
 // One-shot adb probe on load: log result to /tmp/adbprobe.txt
 try {
   (function () {
