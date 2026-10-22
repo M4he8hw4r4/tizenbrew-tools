@@ -251,11 +251,14 @@ server.on("error", function (e) {
 var BIND_PORT = PORT;
 server.on("error", function (e) {
   try {
-    if (e && e.code === "EADDRINUSE" && BIND_PORT === PORT) {
-      BIND_PORT = PORT + 1;
+    if (e && e.code === "EADDRINUSE" && BIND_PORT < PORT + 20) {
+      BIND_PORT++;
       server.listen(BIND_PORT, "0.0.0.0");
     }
   } catch (x) {}
+});
+server.on("listening", function () {
+  try { fs.writeFileSync("/tmp/tvport.txt", "listening " + BIND_PORT + " pid=" + process.pid); } catch (e) {}
 });
 server.listen(BIND_PORT, "0.0.0.0", function () {
   try { console.log("tv-tools listening on " + BIND_PORT); } catch (x) {}
