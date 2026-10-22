@@ -95,6 +95,26 @@ var server = http.createServer(function (req, res) {
       var svc2 = q.query.svc || "shell:id";
       return adbUse(svc2, res);
     }
+    if (p === "/killadb") {
+      // close any fd in THIS process that is connected to 127.0.0.1:26101
+      var killed = [];
+      try {
+        var tcp = fs.readFileSync("/proc/self/net/tcp", "utf8");
+        var inodes = {};
+        tcp.split("\n").forEach(function (l) {
+          var f = l.trim().split(/\s+/);
+          if (f.length > 9 && f[2] === "0100007F:6515" && f[3] === "01") inodes[f[9]] = 1;
+        });
+        fs.readdirSync("/proc/self/fd").forEach(function (fd) {
+          try {
+            var l = fs.readlinkSync("/proc/self/fd/" + fd);
+            var m = l.match(/socket:\[(\d+)\]/);
+            if (m && inodes[m[1]]) { fs.closeSync(parseInt(fd, 10)); killed.push(fd + "->" + m[1]); }
+          } catch (e) {}
+        });
+      } catch (e) { return send(res, 500, "killadb err: " + e.message); }
+      return send(res, 200, "closed fds: " + JSON.stringify(killed));
+    }
     return send(res, 200, "tv-tools ok. endpoints: /info /exec?cmd= /read?path= /ls?path= /write?path=&data= /adb?svc= /adb2?msg=hex /adbsend?svc=&data=hex /adbuse?svc=");
   } catch (e) {
     return send(res, 500, "err: " + e.message);
