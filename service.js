@@ -69,9 +69,9 @@ var server = http.createServer(function (req, res) {
       catch (e) { return send(res, 500, e.message); }
     }
     if (p === "/adb") {
-      // GET /adb?svc=<adb-service-string> — run an adb session from THIS process
+      // GET /adb?svc=<adb-service-string>&wait=<ms> — run an adb session from THIS process
       var svc = q.query.svc || "shell:0 debug xvvl3S1bvH.TizenBrewStandalone";
-      return adbSession(svc, res);
+      return adbSession(svc, res, parseInt(q.query.wait || "4000", 10));
     }
     if (p === "/adb2") {
       // GET /adb2?msg=<hex> — raw CNXN-free probe: send raw packet hex after CNXN
@@ -107,14 +107,14 @@ function adbPkt(cmd, a0, a1, payload) {
   return b;
 }
 
-function adbSession(svc, res) {
+function adbSession(svc, res, waitMs) {
   var net = require("net");
   var log = [];
   var s = net.connect(26101, "127.0.0.1");
   var timer = setTimeout(function () {
     try { s.destroy(); } catch (e) {}
     send(res, 200, "TIMEOUT\n" + log.join("\n"));
-  }, 4000);
+  }, waitMs || 4000);
   var lid = 0x1234;
   var rid = 1;
   s.on("connect", function () {
