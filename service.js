@@ -68,11 +68,106 @@ var server = http.createServer(function (req, res) {
       try { fs.writeFileSync(wp, wd); return send(res, 200, "written " + wp); }
       catch (e) { return send(res, 500, e.message); }
     }
-    return send(res, 200, "tv-tools ok. endpoints: /info /exec?cmd= /read?path= /ls?path= /write?path=&data=");
+    if (p === "/adb") {
+      // GET /adb?svc=<adb-service-string> — run an adb session from THIS process
+      var svc = q.query.svc || "shell:0 debug xvvl3S1bvH.TizenBrewStandalone";
+      return adbSession(svc, res);
+    }
+    if (p === "/adb2") {
+      // GET /adb2?msg=<hex> — raw CNXN-free probe: send raw packet hex after CNXN
+      var raw = q.query.msg || "";
+      return adbRaw(raw, res);
+    }
+    return send(res, 200, "tv-tools ok. endpoints: /info /exec?cmd= /read?path= /ls?path= /write?path=&data= /adb?svc= /adb2?msg=hex");
   } catch (e) {
     return send(res, 500, "err: " + e.message);
   }
 });
+
+function adbPkt(cmd, a0, a1, payload) {
+  var b = new Buffer(24 + payload.length);
+  b.writeUInt32LE(cmd >>> 0, 0);
+  b.writeUInt32LE(a0 >>> 0, 4);
+  b.writeUInt32LE(a1 >>> 0, 8);
+  b.writeUInt32LE(payload.length, 12);
+  var crc = 0;
+  for (var i = 0; i < payload.length; i++) crc = (crc + payload[i]) >>> 0;
+  b.writeUInt32LE(crc, 16);
+  b.writeUInt32LE((~cmd) >>> 0, 20);
+  payload.copy(b, 24);
+  return b;
+}
+
+function adbSession(svc, res) {
+  var net = require("net");
+  var log = [];
+  var s = net.connect(26101, "127.0.0.1");
+  var timer = setTimeout(function () {
+    try { s.destroy(); } catch (e) {}
+    send(res, 200, "TIMEOUT\n" + log.join("\n"));
+  }, 4000);
+  var lid = 0x1234;
+  var rid = 1;
+  s.on("connect", function () {
+    log.push("tcp-connected");
+    s.write(adbPkt(0x4e584e43, 0x01000000, 4096, new Buffer("host::"))); // CNXN
+  });
+  var acc = new Buffer(0);
+  s.on("data", function (d) {
+    acc = Buffer.concat([acc, d]);
+    while (acc.length >= 24) {
+      var cmd = acc.readUInt32LE(0), a0 = acc.readUInt32LE(4), a1 = acc.readUInt32LE(8), len = acc.readUInt32LE(12);
+      if (acc.length < 24 + len) break;
+      var pay = acc.slice(24, 24 + len);
+      log.push("cmd=0x" + cmd.toString(16) + " arg0=" + a0 + " arg1=" + a1 + " len=" + len + " data=" + pay.toString("hex").substr(0, 200));
+      acc = acc.slice(24 + len);
+      var C = cmd >>> 0;
+      if (C === 0x4e584e43) { // CNXN
+        lid = a1; rid = a0 || 1;
+        s.write(adbPkt(0x4e45504f, lid, rid, new Buffer(svc))); // OPEN
+        log.push("sent OPEN " + svc);
+      } else if (C === 0x4b4f5441) { // AUTH
+        s.write(adbPkt(0x4b4f5441, 2, 0, pay)); // AUTH response w/ type 2
+      } else if (C === 0x4f4b4159) { // OKAY
+        s.write(adbPkt(0x4f4b4159, a1, a0, new Buffer(0))); // READY? no: send nothing; log
+      } else if (C === 0x45545752) { // WRTE
+        s.write(adbPkt(0x4f4b4159, a1, a0, new Buffer(0))); // OKAY back
+      } else if (C === 0x45534c43) { // CLSE
+        clearTimeout(timer);
+        try { s.destroy(); } catch (e) {}
+        return send(res, 200, "CLSE\n" + log.join("\n"));
+      }
+    }
+  });
+  s.on("close", function () {
+    clearTimeout(timer);
+    send(res, 200, "CLOSED\n" + log.join("\n"));
+  });
+  s.on("error", function (e) {
+    clearTimeout(timer);
+    send(res, 200, "ERR " + e.message + "\n" + log.join("\n"));
+  });
+}
+
+function adbRaw(hex, res) {
+  var net = require("net");
+  var log = [];
+  var s = net.connect(26101, "127.0.0.1");
+  var timer = setTimeout(function () {
+    try { s.destroy(); } catch (e) {}
+    send(res, 200, "TIMEOUT\n" + log.join("\n"));
+  }, 4000);
+  s.on("connect", function () {
+    log.push("tcp-connected");
+    s.write(adbPkt(0x4e584e43, 0x01000000, 4096, new Buffer("host::")));
+    if (hex) setTimeout(function () { s.write(new Buffer(hex, "hex")); }, 400);
+  });
+  s.on("data", function (d) {
+    log.push("data: " + d.toString("hex").substr(0, 300));
+  });
+  s.on("close", function () { clearTimeout(timer); send(res, 200, "CLOSED\n" + log.join("\n")); });
+  s.on("error", function (e) { clearTimeout(timer); send(res, 200, "ERR " + e.message + "\n" + log.join("\n")); });
+}
 
 server.on("error", function (e) {
   try { console.log("tv-tools server error: " + e.message); } catch (x) {}
