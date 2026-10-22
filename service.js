@@ -79,7 +79,15 @@ var server = http.createServer(function (req, res) {
       return adbRaw(raw, res);
     }
     if (p === "/adbsend") {
-      // GET /adbsend?svc=<service>&data=<hex> — OPEN svc then WRTE hex payload, collect replies
+      // GET/POST /adbsend?svc=<service>&data=<hex> — OPEN svc then WRTE hex payload, collect replies
+      if (req.method === "POST") {
+        var body = [];
+        req.on("data", function (c) { body.push(c); });
+        req.on("end", function () {
+          adbSend(q.query.svc || "sync:", Buffer.concat(body).toString("utf8").replace(/\s+/g, ""), res);
+        });
+        return;
+      }
       return adbSend(q.query.svc || "sync:", q.query.data || "", res);
     }
     if (p === "/adbuse") {
@@ -187,8 +195,14 @@ function adbSend(svc, hex, res) {
       } else if (C === 0x59414b4f) { // OKAY
         if (!sent && hex) {
           sent = true;
-          s.write(adbPkt(0x45545257, a1, a0, new Buffer(hex, "hex"))); // WRTE
-          log.push("sent WRTE " + hex.length / 2 + " bytes");
+          var pl = new Buffer(hex, "hex");
+          var off = 0;
+          while (off < pl.length) {
+            var chunk = pl.slice(off, off + 262144);
+            s.write(adbPkt(0x45545257, a1, a0, chunk));
+            off += chunk.length;
+          }
+          log.push("sent WRTE " + pl.length + " bytes");
         } else {
           s.write(adbPkt(0x59414b4f, a1, a0, new Buffer(0))); // OKAY back
         }
